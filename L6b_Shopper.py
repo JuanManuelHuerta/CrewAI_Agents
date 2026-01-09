@@ -4,7 +4,29 @@ warnings.filterwarnings('ignore')
 
 from crewai import Agent, Task, Crew
 from pydantic import BaseModel, Field
+from crewai.tools import BaseTool
 from typing import List, Dict
+
+from crewai_tools import DirectoryReadTool, \
+                         FileReadTool
+
+
+#target_asin="B00NGVF4II"
+target_asin="B0B1GZMSCV"
+
+directory_read_tool = DirectoryReadTool(directory=f"./product_data/{target_asin}")
+file_read_tool = FileReadTool()
+file_read_tool_masked = FileReadTool(file_path=f"product_data/{target_asin}/masked.json")
+
+class SentimentAnalysisTool(BaseTool):
+    name: str = "Sentiment Analysis Tool"
+    description: str = ("Analyzes the sentiment of text "
+                        "to ensure positive and engaging communication.")
+
+    def _run(self, text: str) -> str:
+        # Your custom code tool goes here
+        return "positive"
+
 
 
 class ProductAttributes(BaseModel):
@@ -63,9 +85,9 @@ data_masker = Agent(
     verbose=True
 )
 
-data_estimator = Agent(
-    role='Data Estimator',
-    goal='Perform a quantitative and rational estimate of the masked value.',
+price_estimator = Agent(
+    role='Price Estimator',
+    goal='Determines if a specific price is competitive and compares versus other products.',
     backstory='Rational and Evidence based estimation.',
     verbose=True
 )
@@ -84,7 +106,7 @@ task1 = Task(
     agent=shopper_agent,
     output_json=ProductAttributes,
     tools = [scrape_tool, search_tool],
-    output_file="cohort_characteristics.json"
+    output_file=f"product_data/{target_asin}/cohort_characteristics.json"
 )
 
 task2 = Task(
@@ -111,6 +133,7 @@ description="""
     agent=data_masker,
     expected_output='Masked product data with prices and attribute values for all products. Do not add any comments.',
     output_pydantic=ProductDataList,
+    output_file=f"product_data/{target_asin}/masked.json",
     context=[task2]  # This gives task2 access to task1's output
 
 
@@ -119,16 +142,14 @@ description="""
 
 task4 = Task(
 description="""
-     Receive the Masked ProductDataList json object from the previous task and provide a rational estimate of the value that is masked.
-     Use only features, prices and attributes of the received masked object. Replace the product ID for this product with a 1 sentence rationale for the estimate.
-     Be as objective as possible and provide your thinking.  The output should be simply a JSON file following the provided pydantic object.
-         """,
-    agent=data_estimator,
-    expected_output='product data with prices and attribute values for all products. Replace the masked value (-1.0) with a rational estimate. Do not add any comments.',
-    output_pydantic=ProductDataList,
-    context=[task3]  # This gives task2 access to task1's output
-
-
+     Receives the set of products and from it reasons if the price of the query product {target_asin} is competitive.
+     To determine this, it uses the other products, their prices, and their features to explain if the price is competitive or
+     too high or too low and why.
+        """,
+    agent=price_estimator,
+    context=[task2],
+    output_file=f"product_data/{target_asin}/price_reasoning.md",
+    expected_output="For the product {target_asin} provide first a determination if the price is high, fair, or low. Then explain why using other products prices and features. Use markdown."
 
 )
 
@@ -138,9 +159,9 @@ from langchain_openai import ChatOpenAI
 # Define the crew with agents and tasks
 shopper_crew = Crew(
 
-    agents=[shopper_agent, data_collector, data_masker, data_estimator],
+    agents=[shopper_agent, data_collector, data_masker, price_estimator],
 
-    tasks=[task1, task2, task3,task4],
+    tasks=[task1, task2, task3, task4],
 
     manager_llm=ChatOpenAI(model="gpt-4o-mini",
                            temperature=0.7),
@@ -151,7 +172,7 @@ shopper_crew = Crew(
 
 # Example data for kicking off the process
 shopping_inputs = {
-    'target_asin': 'B00NGVF4II'
+    'target_asin': target_asin
 }
 
 ### this execution will take some time to run
